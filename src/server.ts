@@ -1,14 +1,30 @@
 import { base64urlDecodeToBytes, base64urlDecodeToString } from './internal/base64url';
-import { getCrypto } from './internal/crypto';
-import {
-  DEFAULT_TELEGRAM_OIDC_ENDPOINTS,
-  type TelegramIdTokenClaims,
-  type TelegramOidcEndpoints,
-  type TelegramTokenResponse,
-} from './types';
+import type { TelegramIdTokenClaims } from './types';
 
 // ---------------------------------------------------------------------------
-// Discovery + JWKS (with simple in-process caching)
+// Defaults for Telegram's OAuth 2.0 / OIDC endpoints
+// ---------------------------------------------------------------------------
+
+export const TELEGRAM_OIDC_ISSUER = 'https://oauth.telegram.org';
+export const TELEGRAM_OIDC_JWKS_URI = 'https://oauth.telegram.org/.well-known/jwks.json';
+
+// ---------------------------------------------------------------------------
+// Web Crypto resolver (works in Node 18+, edge, Bun, Deno, browsers)
+// ---------------------------------------------------------------------------
+
+const getCrypto = (): Crypto => {
+  const c = (globalThis as { crypto?: Crypto }).crypto;
+  if (!c?.subtle) {
+    throw new Error(
+      '[react-telegram-oidc-login] Web Crypto (globalThis.crypto.subtle) is unavailable. ' +
+        'Run on Node 18+, an edge runtime, Bun, Deno, or a modern browser.',
+    );
+  }
+  return c;
+};
+
+// ---------------------------------------------------------------------------
+// Discovery + JWKS (in-process caching)
 // ---------------------------------------------------------------------------
 
 interface CacheEntry<T> {
@@ -57,7 +73,7 @@ export interface FetchOptions {
   fetch?: typeof fetch;
   /** Cache TTL in milliseconds. Defaults to 1 hour. */
   cacheTtlMs?: number;
-  /** Bypass cache and force a network request. */
+  /** Bypass the cache and force a network request. */
   forceRefresh?: boolean;
 }
 
@@ -71,11 +87,11 @@ const getFetch = (custom?: typeof fetch): typeof fetch => {
   return f;
 };
 
-/** Fetches and caches the OIDC discovery document. */
+/** Fetch + cache the OIDC discovery document. */
 export const getTelegramOpenIdConfig = async (
   options: FetchOptions & { issuer?: string } = {},
 ): Promise<OpenIdConfiguration> => {
-  const issuer = options.issuer ?? DEFAULT_TELEGRAM_OIDC_ENDPOINTS.issuer;
+  const issuer = options.issuer ?? TELEGRAM_OIDC_ISSUER;
   const url = `${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`;
   const ttl = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 
@@ -109,11 +125,11 @@ interface Jwk {
 }
 interface Jwks { keys: Jwk[] }
 
-/** Fetches and caches the JWKS for ID-token verification. */
+/** Fetch + cache the JWKS used for ID-token signature verification. */
 export const getTelegramJwks = async (
   options: FetchOptions & { jwksUri?: string } = {},
 ): Promise<Jwks> => {
-  const url = options.jwksUri ?? DEFAULT_TELEGRAM_OIDC_ENDPOINTS.jwksUri;
+  const url = options.jwksUri ?? TELEGRAM_OIDC_JWKS_URI;
   const ttl = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 
   if (!options.forceRefresh) {
@@ -133,108 +149,6 @@ export const getTelegramJwks = async (
 };
 
 // ---------------------------------------------------------------------------
-// Token exchange
-// ---------------------------------------------------------------------------
-
-export interface ExchangeTelegramCodeOptions {
-  clientId: string;
-  /**
-   * Bot's OAuth client secret. Required by Telegram's token endpoint
-   * (Basic-auth). Never expose this to the browser.
-   */
-  clientSecret: string;
-  /** Authorization code received on the callback. */
-  code: string;
-  /** PKCE verifier the browser generated (not the challenge). */
-  codeVerifier: string;
-  /** Same redirect URI used for the authorization request. */
-  redirectUri: string;
-  /** Override the token endpoint (e.g. for tests). */
-  endpoints?: TelegramOidcEndpoints;
-  /** Custom fetch implementation. */
-  fetch?: typeof fetch;
-}
-
-const toBase64Ascii = (input: string): string => {
-  // `btoa` is a global in Node 18+, browsers, edge runtimes, Bun, and Deno.
-  if (typeof btoa !== 'function') {
-    throw new Error(
-      '[react-telegram-oidc-login] Global `btoa` is unavailable. Run on Node 18+, edge, Bun, Deno, or a browser.',
-    );
-  }
-  return btoa(input);
-};
-
-/**
- * Exchanges an authorization code for tokens against Telegram's token endpoint.
- *
- * Per the docs the endpoint expects:
- *   - HTTP Basic auth: base64(client_id:client_secret)
- *   - application/x-www-form-urlencoded body with grant_type, code,
- *     redirect_uri, client_id, code_verifier
- */
-export const exchangeTelegramCode = async (
-  options: ExchangeTelegramCodeOptions,
-): Promise<TelegramTokenResponse> => {
-  const {
-    clientId,
-    clientSecret,
-    code,
-    codeVerifier,
-    redirectUri,
-    endpoints,
-    fetch: customFetch,
-  } = options;
-
-  if (!clientId || !clientSecret) {
-    throw new Error(
-      '[react-telegram-oidc-login] `clientId` and `clientSecret` are both required for token exchange.',
-    );
-  }
-
-  const url = endpoints?.tokenEndpoint ?? DEFAULT_TELEGRAM_OIDC_ENDPOINTS.tokenEndpoint;
-  const body = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code,
-    redirect_uri: redirectUri,
-    client_id: clientId,
-    code_verifier: codeVerifier,
-  });
-
-  const res = await getFetch(customFetch)(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${toBase64Ascii(`${clientId}:${clientSecret}`)}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Accept: 'application/json',
-    },
-    body: body.toString(),
-  });
-
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(
-      `[react-telegram-oidc-login] token exchange failed: ${res.status} ${res.statusText} — ${text}`,
-    );
-  }
-
-  let parsed: TelegramTokenResponse;
-  try {
-    parsed = JSON.parse(text) as TelegramTokenResponse;
-  } catch {
-    throw new Error(
-      `[react-telegram-oidc-login] token endpoint returned non-JSON response: ${text}`,
-    );
-  }
-  if (!parsed.access_token || !parsed.id_token) {
-    throw new Error(
-      `[react-telegram-oidc-login] token response missing access_token or id_token: ${text}`,
-    );
-  }
-  return parsed;
-};
-
-// ---------------------------------------------------------------------------
 // ID token verification
 // ---------------------------------------------------------------------------
 
@@ -246,40 +160,19 @@ interface JwtHeader {
 
 const ALG_TO_IMPORT: Record<
   string,
-  { import: AlgorithmIdentifier | RsaHashedImportParams | EcKeyImportParams; verify: AlgorithmIdentifier | RsaPssParams | EcdsaParams }
+  {
+    import: AlgorithmIdentifier | RsaHashedImportParams | EcKeyImportParams;
+    verify: AlgorithmIdentifier | RsaPssParams | EcdsaParams;
+  }
 > = {
-  RS256: {
-    import: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    verify: { name: 'RSASSA-PKCS1-v1_5' },
-  },
-  RS384: {
-    import: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-384' },
-    verify: { name: 'RSASSA-PKCS1-v1_5' },
-  },
-  RS512: {
-    import: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-512' },
-    verify: { name: 'RSASSA-PKCS1-v1_5' },
-  },
-  PS256: {
-    import: { name: 'RSA-PSS', hash: 'SHA-256' },
-    verify: { name: 'RSA-PSS', saltLength: 32 },
-  },
-  PS384: {
-    import: { name: 'RSA-PSS', hash: 'SHA-384' },
-    verify: { name: 'RSA-PSS', saltLength: 48 },
-  },
-  PS512: {
-    import: { name: 'RSA-PSS', hash: 'SHA-512' },
-    verify: { name: 'RSA-PSS', saltLength: 64 },
-  },
-  ES256: {
-    import: { name: 'ECDSA', namedCurve: 'P-256' },
-    verify: { name: 'ECDSA', hash: 'SHA-256' },
-  },
-  ES384: {
-    import: { name: 'ECDSA', namedCurve: 'P-384' },
-    verify: { name: 'ECDSA', hash: 'SHA-384' },
-  },
+  RS256: { import: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, verify: { name: 'RSASSA-PKCS1-v1_5' } },
+  RS384: { import: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-384' }, verify: { name: 'RSASSA-PKCS1-v1_5' } },
+  RS512: { import: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-512' }, verify: { name: 'RSASSA-PKCS1-v1_5' } },
+  PS256: { import: { name: 'RSA-PSS', hash: 'SHA-256' }, verify: { name: 'RSA-PSS', saltLength: 32 } },
+  PS384: { import: { name: 'RSA-PSS', hash: 'SHA-384' }, verify: { name: 'RSA-PSS', saltLength: 48 } },
+  PS512: { import: { name: 'RSA-PSS', hash: 'SHA-512' }, verify: { name: 'RSA-PSS', saltLength: 64 } },
+  ES256: { import: { name: 'ECDSA', namedCurve: 'P-256' }, verify: { name: 'ECDSA', hash: 'SHA-256' } },
+  ES384: { import: { name: 'ECDSA', namedCurve: 'P-384' }, verify: { name: 'ECDSA', hash: 'SHA-384' } },
 };
 
 const importJwk = async (jwk: Jwk, alg: string): Promise<CryptoKey> => {
@@ -287,13 +180,7 @@ const importJwk = async (jwk: Jwk, alg: string): Promise<CryptoKey> => {
   if (!algSpec) {
     throw new Error(`[react-telegram-oidc-login] unsupported JWT alg: ${alg}`);
   }
-  return getCrypto().subtle.importKey(
-    'jwk',
-    jwk as JsonWebKey,
-    algSpec.import,
-    false,
-    ['verify'],
-  );
+  return getCrypto().subtle.importKey('jwk', jwk as JsonWebKey, algSpec.import, false, ['verify']);
 };
 
 const findJwk = (jwks: Jwks, kid?: string): Jwk[] => {
@@ -301,16 +188,15 @@ const findJwk = (jwks: Jwks, kid?: string): Jwk[] => {
     const exact = jwks.keys.find((k) => k.kid === kid);
     if (exact) return [exact];
   }
-  // No kid provided, or no exact match — fall back to any signing key.
   return jwks.keys.filter((k) => !k.use || k.use === 'sig');
 };
 
 export interface VerifyTelegramIdTokenOptions {
   /** Expected `aud` claim. Should equal your bot's client_id. */
-  clientId: string;
+  clientId: string | number;
   /** Expected `iss` claim. Defaults to https://oauth.telegram.org. */
   issuer?: string;
-  /** Expected nonce — should match the one generated when starting auth. */
+  /** Expected nonce — should match the one passed to `Telegram.Login.auth()`. */
   nonce?: string;
   /** Allowed clock skew in seconds (default: 60). */
   clockToleranceSeconds?: number;
@@ -318,13 +204,13 @@ export interface VerifyTelegramIdTokenOptions {
   jwksUri?: string;
   /** Provide JWKS inline (skips network fetch). */
   jwks?: Jwks;
-  /** Custom fetch implementation (used when no inline JWKS is provided). */
+  /** Custom fetch implementation. */
   fetch?: typeof fetch;
   /** JWKS cache TTL in ms (default: 1 hour). */
   cacheTtlMs?: number;
   /**
    * If verification fails because no JWK matched, force a one-shot JWKS
-   * refresh and try again. Defaults to true.
+   * refresh and try again. Defaults to true. Handles key rotation transparently.
    */
   retryOnJwksMiss?: boolean;
 }
@@ -348,7 +234,12 @@ export class TelegramIdTokenError extends Error {
 
 const decodeJwtParts = (
   jwt: string,
-): { header: JwtHeader; payload: TelegramIdTokenClaims; signingInput: string; signature: Uint8Array } => {
+): {
+  header: JwtHeader;
+  payload: TelegramIdTokenClaims;
+  signingInput: string;
+  signature: Uint8Array;
+} => {
   const parts = jwt.split('.');
   if (parts.length !== 3) {
     throw new TelegramIdTokenError('malformed', 'JWT must have exactly three segments.');
@@ -380,7 +271,7 @@ const verifyClaims = (
   const tolerance = options.clockToleranceSeconds ?? 60;
   const now = Math.floor(Date.now() / 1000);
 
-  const expectedIssuer = options.issuer ?? DEFAULT_TELEGRAM_OIDC_ENDPOINTS.issuer;
+  const expectedIssuer = options.issuer ?? TELEGRAM_OIDC_ISSUER;
   if (payload.iss !== expectedIssuer) {
     throw new TelegramIdTokenError(
       'bad_issuer',
@@ -388,13 +279,14 @@ const verifyClaims = (
     );
   }
 
+  const expectedAud = String(options.clientId);
   const audMatches = Array.isArray(payload.aud)
-    ? payload.aud.includes(options.clientId)
-    : payload.aud === options.clientId;
+    ? payload.aud.map(String).includes(expectedAud)
+    : String(payload.aud) === expectedAud;
   if (!audMatches) {
     throw new TelegramIdTokenError(
       'bad_audience',
-      `Expected aud "${options.clientId}", got ${JSON.stringify(payload.aud)}.`,
+      `Expected aud "${expectedAud}", got ${JSON.stringify(payload.aud)}.`,
     );
   }
 
@@ -416,28 +308,25 @@ const verifyClaims = (
 };
 
 /**
- * Verifies a Telegram-issued ID token: signature against JWKS, then
+ * Verify a Telegram-issued ID token: signature against JWKS, then
  * `iss`/`aud`/`exp`/`iat`/`nonce` claims. Returns the parsed claims on success.
  *
  * Caches JWKS in process for one hour by default. If no JWK matches the
- * token's `kid`, the JWKS is fetched once more before giving up — this
- * handles key rotation transparently.
+ * token's `kid`, the JWKS is refreshed once before giving up — this makes
+ * key rotation transparent.
  */
 export const verifyTelegramIdToken = async (
   jwt: string,
   options: VerifyTelegramIdTokenOptions,
 ): Promise<TelegramIdTokenClaims> => {
-  if (!options.clientId) {
+  if (options.clientId == null) {
     throw new Error('[react-telegram-oidc-login] `clientId` is required for verification.');
   }
 
   const { header, payload, signingInput, signature } = decodeJwtParts(jwt);
 
   if (!ALG_TO_IMPORT[header.alg]) {
-    throw new TelegramIdTokenError(
-      'malformed',
-      `Unsupported JWT alg: ${header.alg}`,
-    );
+    throw new TelegramIdTokenError('malformed', `Unsupported JWT alg: ${header.alg}`);
   }
 
   const verifySignature = async (jwks: Jwks): Promise<boolean> => {
@@ -494,8 +383,4 @@ export const verifyTelegramIdToken = async (
   return payload;
 };
 
-export type {
-  TelegramIdTokenClaims,
-  TelegramOidcEndpoints,
-  TelegramTokenResponse,
-} from './types';
+export type { TelegramIdTokenClaims } from './types';

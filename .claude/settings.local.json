@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:core.telegram.org)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(curl -s \"https://telegram.org/js/telegram-login.js\")",
+      "Bash(rm -rf node_modules package-lock.json)",
+      "Bash(npm install *)"
     ]
   }
 }

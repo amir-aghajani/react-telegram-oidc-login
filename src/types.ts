@@ -1,42 +1,9 @@
 /**
- * Endpoints for Telegram's OAuth 2.0 / OpenID Connect implementation.
- *
- * Defaults match the well-known Telegram URLs. Override only if you are
- * proxying the flow through your own infrastructure.
- *
- * @see https://core.telegram.org/bots/telegram-login
- * @see https://oauth.telegram.org/.well-known/openid-configuration
- */
-export interface TelegramOidcEndpoints {
-  authorizationEndpoint?: string;
-  tokenEndpoint?: string;
-  jwksUri?: string;
-  issuer?: string;
-}
-
-export const DEFAULT_TELEGRAM_OIDC_ENDPOINTS: Required<TelegramOidcEndpoints> = {
-  authorizationEndpoint: 'https://oauth.telegram.org/auth',
-  tokenEndpoint: 'https://oauth.telegram.org/token',
-  jwksUri: 'https://oauth.telegram.org/.well-known/jwks.json',
-  issuer: 'https://oauth.telegram.org',
-};
-
-/**
- * Standard scopes recognized by Telegram's OIDC server.
- * `openid` is always required.
- */
-export type TelegramScope =
-  | 'openid'
-  | 'profile'
-  | 'phone'
-  | 'telegram:bot_access'
-  | (string & {});
-
-/**
  * Claims found in a verified Telegram ID token.
  *
  * `sub`, `iss`, `iat`, `exp`, and `aud` are present whenever `openid` is
- * requested. The remainder are conditional on the granted scopes.
+ * requested (the SDK always requests it). The remainder are conditional on
+ * the granted `request_access` value.
  */
 export interface TelegramIdTokenClaims {
   iss: string;
@@ -47,101 +14,111 @@ export interface TelegramIdTokenClaims {
   /** Random value passed in the auth request, echoed back. */
   nonce?: string;
 
-  /** Telegram user id (numeric, returned as a number in the JWT payload). */
+  /** Telegram user id (numeric). */
   id?: number;
-  /** Display name. Requires the `profile` scope. */
+  /** Display name. Always present when the SDK is used (it requests `profile`). */
   name?: string;
-  /** Telegram username without the leading "@". Requires `profile`. */
+  /** Telegram username without the leading "@". */
   preferred_username?: string;
-  /** Profile picture URL. Requires `profile`. */
+  /** Profile picture URL. */
   picture?: string;
-  /** E.164 phone number including a leading "+". Requires `phone`. */
+  /** E.164 phone number. Requires `request_access: 'phone'`. */
   phone_number?: string;
 
   [extraClaim: string]: unknown;
 }
 
 /**
- * Raw response body returned by Telegram's token endpoint on a successful
- * authorization-code exchange.
+ * Permissions to request from the user. `'phone'` adds the OIDC `phone`
+ * scope, `'write'` adds `telegram:bot_access` (lets the bot DM the user).
  */
-export interface TelegramTokenResponse {
-  access_token: string;
-  token_type: 'Bearer' | string;
-  expires_in: number;
-  id_token: string;
-  refresh_token?: string;
-  scope?: string;
+export type TelegramRequestAccess = 'phone' | 'write';
+
+/**
+ * Options accepted by `Telegram.Login.init` / `Telegram.Login.auth`.
+ *
+ * @see https://core.telegram.org/bots/telegram-login
+ */
+export interface TelegramLoginInitOptions {
+  /** Numeric bot id assigned by @BotFather. */
+  client_id: string | number;
+  /** Permissions to request beyond the default `openid profile`. */
+  request_access?: TelegramRequestAccess | TelegramRequestAccess[];
+  /** ISO 639-1 language code for the popup UI. */
+  lang?: string;
+  /** Random nonce to bind the resulting ID token to this attempt. */
+  nonce?: string;
 }
 
-export type TelegramButtonSize = 'large' | 'medium' | 'small';
+/**
+ * The shape Telegram's SDK calls your callback with.
+ *
+ * On success: `{ id_token, user }`. The `user` field is the JWT payload
+ * decoded *without* signature verification — treat it as untrusted UI hints
+ * and verify `id_token` on the server before persisting anything.
+ *
+ * On failure: `{ error }`. Common values include `"popup_closed"` (user
+ * dismissed the popup), `"missing id_token"`, `"malformed id_token"`, and
+ * any error returned by the OAuth server.
+ */
+export type TelegramAuthResult =
+  | { id_token: string; user: TelegramIdTokenClaims; error?: undefined }
+  | { id_token?: undefined; user?: undefined; error: string };
 
-export interface TelegramLoginButtonProps {
+export type TelegramAuthCallback = (result: TelegramAuthResult) => void;
+
+/**
+ * Subset of `window.Telegram.Login` that this package depends on.
+ */
+export interface TelegramLoginGlobal {
+  init(options: TelegramLoginInitOptions, callback?: TelegramAuthCallback): void;
+  open(callback?: TelegramAuthCallback): void;
+  auth(options: TelegramLoginInitOptions, callback?: TelegramAuthCallback): void;
+  close?(): void;
+}
+
+export type TelegramButtonStyle = 'default' | 'square' | 'outlined' | 'icon' | 'shine';
+
+export interface TelegramLoginButtonProps extends TelegramLoginInitOptions {
   /**
-   * The bot id Telegram assigned when the bot was created.
-   * Used as the `client_id` in the OAuth request.
+   * Called with the auth result. If omitted, the result is still returned
+   * by `useTelegramLogin().login()` for consumers using the headless path.
    */
-  clientId: string;
+  onAuth?: TelegramAuthCallback;
 
   /**
-   * Absolute URL the user is sent back to after authorizing.
-   * Must match a redirect URI registered with @BotFather.
-   */
-  redirectUri: string;
-
-  /**
-   * OIDC scopes to request. `openid` is added automatically if missing.
-   * Defaults to `['openid', 'profile']`.
-   */
-  scope?: TelegramScope[];
-
-  /**
-   * Optional `nonce` to bind the ID token to this login attempt.
-   * If omitted a cryptographically random one is generated and stored.
-   */
-  nonce?: string;
-
-  /** Override OIDC endpoints (e.g. for proxying through your own backend). */
-  endpoints?: TelegramOidcEndpoints;
-
-  /**
-   * Storage backend for PKCE verifier, state, and nonce. Defaults to
-   * `sessionStorage`. Must implement the basic `Storage` interface.
-   */
-  storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
-
-  /**
-   * Called with any error generated *while preparing the redirect*.
-   * Errors that happen on the callback page are surfaced separately by
-   * `consumeTelegramCallback` / `useTelegramAuthCallback`.
+   * Called if the SDK script fails to load (offline, blocked, etc.).
    */
   onError?: (error: Error) => void;
 
-  /** Visual size of the button. Defaults to `"large"`. */
-  buttonSize?: TelegramButtonSize;
+  /** Override the script URL (e.g. self-hosted mirror). */
+  scriptSrc?: string;
 
-  /** Corner radius in pixels. Defaults to 8. */
-  cornerRadius?: number;
+  /**
+   * One or more visual variants supported by Telegram's bundled CSS.
+   * Pass an array to combine them, e.g. `['outlined', 'shine']`.
+   * Ignored if `children` is provided.
+   */
+  variant?: TelegramButtonStyle | TelegramButtonStyle[];
 
-  /** Override the button label. */
+  /** Override the button label. Ignored if `children` is provided. */
   label?: React.ReactNode;
 
   /** Disable the button. */
   disabled?: boolean;
 
-  /** Class on the underlying `<button>`. */
+  /** Class merged onto the underlying `<button>`. */
   className?: string;
 
   /** Inline style on the underlying `<button>`. */
   style?: React.CSSProperties;
 
-  /** Optional id on the underlying `<button>`. */
+  /** id on the underlying `<button>`. */
   id?: string;
 
   /**
-   * Replace the default rendering entirely. Receives a click handler that
-   * starts the OIDC flow. When provided, `buttonSize`/`cornerRadius`/`label`
-   * are ignored.
+   * Render-prop for full control over markup. Receives `onClick` and
+   * `loading`. When provided, all built-in styling is skipped.
    */
   children?: (args: { onClick: () => void; loading: boolean }) => React.ReactNode;
 }

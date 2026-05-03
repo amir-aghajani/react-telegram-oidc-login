@@ -1,35 +1,41 @@
-import { TelegramIcon } from './TelegramIcon';
+import { useCallback, useEffect, useRef } from 'react';
 import { useTelegramLogin } from './useTelegramLogin';
-import type { TelegramLoginButtonProps } from './types';
+import type {
+  TelegramAuthResult,
+  TelegramButtonStyle,
+  TelegramLoginButtonProps,
+} from './types';
 
-const SIZE_TO_HEIGHT: Record<NonNullable<TelegramLoginButtonProps['buttonSize']>, number> = {
-  large: 40,
-  medium: 32,
-  small: 24,
-};
+const buildClassName = (extra: string | undefined): string =>
+  extra ? `tg-auth-button ${extra}` : 'tg-auth-button';
 
-const SIZE_TO_FONT: Record<NonNullable<TelegramLoginButtonProps['buttonSize']>, number> = {
-  large: 15,
-  medium: 13,
-  small: 12,
+const buildDataStyle = (
+  variant: TelegramLoginButtonProps['variant'],
+): string | undefined => {
+  if (!variant) return undefined;
+  const list: TelegramButtonStyle[] = Array.isArray(variant) ? variant : [variant];
+  const filtered = list.filter((v) => v !== 'default');
+  return filtered.length > 0 ? filtered.join(' ') : undefined;
 };
 
 /**
- * Pre-styled button that initiates Telegram's OIDC authorization-code + PKCE
- * flow. For full styling control, use the `children` render-prop or reach for
+ * Renders Telegram's official login button. On click, opens Telegram's
+ * popup via `window.Telegram.Login.auth()` and reports the result through
+ * `onAuth`.
+ *
+ * For full styling control, pass a `children` render-prop or use
  * `useTelegramLogin` directly.
  */
 export function TelegramLoginButton(props: TelegramLoginButtonProps): JSX.Element {
   const {
-    clientId,
-    redirectUri,
-    scope,
+    client_id,
+    request_access,
+    lang,
     nonce,
-    endpoints,
-    storage,
+    onAuth,
     onError,
-    buttonSize = 'large',
-    cornerRadius = 8,
+    scriptSrc,
+    variant,
     label,
     disabled,
     className,
@@ -38,54 +44,47 @@ export function TelegramLoginButton(props: TelegramLoginButtonProps): JSX.Elemen
     children,
   } = props;
 
-  const { login, loading } = useTelegramLogin({
-    clientId,
-    redirectUri,
-    scope,
+  const { login, loading, error } = useTelegramLogin({
+    client_id,
+    request_access,
+    lang,
     nonce,
-    endpoints,
-    storage,
-    onError,
+    scriptSrc,
   });
 
+  const onAuthRef = useRef(onAuth);
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onAuthRef.current = onAuth;
+    onErrorRef.current = onError;
+  });
+
+  // Surface SDK load failures through `onError`. Popup-closed lands in the
+  // auth result, not here.
+  useEffect(() => {
+    if (error && onErrorRef.current) onErrorRef.current(error);
+  }, [error]);
+
+  const onClick = useCallback(async () => {
+    const result: TelegramAuthResult = await login();
+    if (onAuthRef.current) onAuthRef.current(result);
+  }, [login]);
+
   if (children) {
-    return <>{children({ onClick: login, loading })}</>;
+    return <>{children({ onClick, loading })}</>;
   }
-
-  const height = SIZE_TO_HEIGHT[buttonSize];
-  const fontSize = SIZE_TO_FONT[buttonSize];
-
-  const defaultStyle: React.CSSProperties = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 8,
-    height,
-    padding: `0 ${Math.round(height * 0.4)}px`,
-    fontSize,
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-    fontWeight: 500,
-    lineHeight: 1,
-    color: '#fff',
-    background: '#54a9eb',
-    border: 'none',
-    borderRadius: cornerRadius,
-    cursor: disabled || loading ? 'not-allowed' : 'pointer',
-    opacity: disabled ? 0.6 : 1,
-    ...style,
-  };
 
   return (
     <button
       type="button"
       id={id}
-      className={className}
-      style={defaultStyle}
+      className={buildClassName(className)}
+      data-style={buildDataStyle(variant)}
+      style={style}
       disabled={disabled || loading}
-      onClick={login}
+      onClick={onClick}
     >
-      <TelegramIcon style={{ width: '1.2em', height: '1.2em' }} />
-      {label ?? (loading ? 'Redirecting…' : 'Log in with Telegram')}
+      {label ?? (loading ? 'Opening Telegram…' : 'Log in with Telegram')}
     </button>
   );
 }

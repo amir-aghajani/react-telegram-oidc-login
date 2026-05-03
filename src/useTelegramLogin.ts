@@ -1,90 +1,134 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { startTelegramAuth, type StartTelegramAuthOptions } from './auth';
+import {
+  loadTelegramLoginScript,
+  type LoadTelegramLoginScriptOptions,
+} from './loader';
+import type {
+  TelegramAuthResult,
+  TelegramLoginInitOptions,
+} from './types';
 
-export interface UseTelegramLoginOptions extends StartTelegramAuthOptions {
+export interface UseTelegramLoginOptions extends TelegramLoginInitOptions {
   /**
-   * What to do once the authorization URL is ready. Defaults to navigating
-   * the current window to it. Override to open a popup, push to a router,
-   * write to a state machine, etc.
+   * Preload the SDK script as soon as the hook mounts (default: true).
+   * Set to false if you'd rather defer the network request until the user
+   * actually clicks the button.
    */
-  onRedirect?: (url: string) => void;
+  preload?: boolean;
+
   /**
-   * Called if preparing the redirect throws (e.g. storage unavailable).
-   * Without this, the error is rethrown from `login()`.
+   * Override the script URL (proxying, self-hosting).
    */
-  onError?: (error: Error) => void;
+  scriptSrc?: string;
 }
 
 export interface UseTelegramLoginResult {
   /**
-   * Kick off the OIDC redirect. Returns when the redirect has been initiated
-   * (or when an error has been handled).
+   * Open Telegram's login popup. Resolves with the auth result — either
+   * `{ id_token, user }` or `{ error }`. Always resolves; never rejects.
    */
-  login: () => Promise<void>;
-  /** True from when `login()` is called until the navigation begins. */
+  login: () => Promise<TelegramAuthResult>;
+
+  /** True from when `login()` is called until the popup resolves. */
   loading: boolean;
-  /** Most recent error from `login()`. Cleared on the next call. */
+
+  /** True once the SDK script has loaded successfully. */
+  ready: boolean;
+
+  /**
+   * Most recent error from loading the SDK or invoking the popup. Cleared
+   * on the next `login()` call. Note: a popup that the user closes is
+   * surfaced through the `login()` result as `{ error: 'popup_closed' }`,
+   * not via this state.
+   */
   error: Error | undefined;
 }
 
 /**
- * Headless equivalent of `<TelegramLoginButton>`: gives you a `login`
- * function and React state for `loading` / `error`, so you can wire it up
- * to any button — shadcn/ui, Radix, MUI, your own — without inheriting the
- * default styling.
+ * Headless wrapper around `Telegram.Login.auth()`. Handles loading the
+ * official SDK script, calling into it on demand, and adapting the
+ * callback-based API to a Promise.
  *
  * @example
- * const { login, loading } = useTelegramLogin({
- *   clientId: process.env.NEXT_PUBLIC_TELEGRAM_OIDC_CLIENT_ID!,
- *   redirectUri: 'https://example.com/auth/telegram/callback',
- * });
- *
- * <Button onClick={login} disabled={loading}>
- *   <TelegramIcon className="mr-2 h-4 w-4" />
- *   Continue with Telegram
- * </Button>
+ * const { login, loading } = useTelegramLogin({ client_id: 123456 });
+ * <Button onClick={async () => {
+ *   const result = await login();
+ *   if ('id_token' in result) postToBackend(result.id_token);
+ * }} disabled={loading}>Continue with Telegram</Button>
  */
 export function useTelegramLogin(
   options: UseTelegramLoginOptions,
 ): UseTelegramLoginResult {
   const [loading, setLoading] = useState(false);
+  const [ready, setReady] = useState(false);
   const [error, setError] = useState<Error | undefined>(undefined);
 
   // Latest options live in a ref so `login`'s identity stays stable across
-  // renders — important when consumers don't memoize their option object.
+  // renders, even when consumers don't memoize their options object.
   const optionsRef = useRef(options);
   useEffect(() => {
     optionsRef.current = options;
   });
 
-  const login = useCallback(async () => {
+  // Preload the SDK so the popup opens instantly on click. Failing here
+  // surfaces via `error`; `login()` will retry the load on first call.
+  useEffect(() => {
+    if (options.preload === false) return;
+    let cancelled = false;
+    const loaderOpts: LoadTelegramLoginScriptOptions = {};
+    if (options.scriptSrc) loaderOpts.src = options.scriptSrc;
+    loadTelegramLoginScript(loaderOpts)
+      .then(() => {
+        if (!cancelled) setReady(true);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err : new Error(String(err)));
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options.preload, options.scriptSrc]);
+
+  const login = useCallback((): Promise<TelegramAuthResult> => {
     const opts = optionsRef.current;
     setError(undefined);
     setLoading(true);
-    try {
-      const { url } = await startTelegramAuth({
-        clientId: opts.clientId,
-        redirectUri: opts.redirectUri,
-        scope: opts.scope,
-        nonce: opts.nonce,
-        state: opts.state,
-        endpoints: opts.endpoints,
-        storage: opts.storage,
-        extraParams: opts.extraParams,
+    const loaderOpts: LoadTelegramLoginScriptOptions = {};
+    if (opts.scriptSrc) loaderOpts.src = opts.scriptSrc;
+    return loadTelegramLoginScript(loaderOpts)
+      .then(
+        (login) =>
+          new Promise<TelegramAuthResult>((resolve) => {
+            try {
+              login.auth(
+                {
+                  client_id: opts.client_id,
+                  request_access: opts.request_access,
+                  lang: opts.lang,
+                  nonce: opts.nonce,
+                },
+                (result) => {
+                  setLoading(false);
+                  resolve(result);
+                },
+              );
+            } catch (err) {
+              setLoading(false);
+              const e = err instanceof Error ? err : new Error(String(err));
+              setError(e);
+              resolve({ error: e.message });
+            }
+          }),
+      )
+      .catch((err: unknown): TelegramAuthResult => {
+        setLoading(false);
+        const e = err instanceof Error ? err : new Error(String(err));
+        setError(e);
+        return { error: e.message };
       });
-      if (opts.onRedirect) {
-        opts.onRedirect(url);
-      } else if (typeof window !== 'undefined') {
-        window.location.assign(url);
-      }
-    } catch (err) {
-      const e = err instanceof Error ? err : new Error(String(err));
-      setError(e);
-      setLoading(false);
-      if (opts.onError) opts.onError(e);
-      else throw e;
-    }
   }, []);
 
-  return { login, loading, error };
+  return { login, loading, ready, error };
 }
