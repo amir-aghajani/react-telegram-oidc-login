@@ -1,7 +1,7 @@
 {
   "name": "react-telegram-oidc-login",
   "version": "0.1.0",
-  "description": "React component and helpers for Telegram's OAuth 2.0 / OpenID Connect login flow (the modern replacement for the iframe Login Widget). Authorization-code + PKCE in the browser, ID-token verification (JWKS, RS256/ES256) on the server. Works with React, Next.js (App & Pages Router), Remix, Vite, and any React 17+ project.",
+  "description": "Headless React + server toolkit for Telegram's official OAuth 2.0 / OpenID Connect login. Wraps the popup-based telegram-login.js SDK in a typed component and hook, plus a server-side ID-token verifier (JWKS, RS256/ES256) that runs on Node 18+, edge runtimes, Bun, and Deno. Works with React, Next.js (App & Pages Router), Remix, Vite, and any React 17+ project.",
   "keywords": [
     "react",
     "telegram",
@@ -11,12 +11,13 @@
     "openid-connect",
     "oidc",
     "oauth2",
-    "pkce",
+    "popup",
     "nextjs",
     "auth",
     "authentication",
     "id-token",
-    "jwks"
+    "jwks",
+    "shadcn"
   ],
   "license": "MIT",
   "author": "Amir Aghajani",
@@ -52,20 +53,14 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm run clean && npm run typecheck && npm run build"
   },
   "peerDependencies": {
-    "react": ">=17.0.0",
-    "react-dom": ">=17.0.0"
-  },
-  "peerDependenciesMeta": {
-    "react-dom": { "optional": true }
+    "react": ">=17.0.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.0",
-    "@types/react-dom": "^18.3.0",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0",
     "rimraf": "^5.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.4.0"
