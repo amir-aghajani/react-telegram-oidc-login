@@ -1,0 +1,11 @@
+src
+examples
+node_modules
+*.tsbuildinfo
+tsconfig.json
+tsup.config.ts
+.gitignore
+.npmignore
+.github
+coverage
+*.log

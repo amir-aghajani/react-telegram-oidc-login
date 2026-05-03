@@ -1,0 +1,79 @@
+{
+  "name": "react-telegram-oidc-login",
+  "version": "0.1.0",
+  "description": "React component and helpers for Telegram's OAuth 2.0 / OpenID Connect login flow (the modern replacement for the iframe Login Widget). Authorization-code + PKCE in the browser, ID-token verification (JWKS, RS256/ES256) on the server. Works with React, Next.js (App & Pages Router), Remix, Vite, and any React 17+ project.",
+  "keywords": [
+    "react",
+    "telegram",
+    "telegram-login",
+    "telegram-oauth",
+    "telegram-oidc",
+    "openid-connect",
+    "oidc",
+    "oauth2",
+    "pkce",
+    "nextjs",
+    "auth",
+    "authentication",
+    "id-token",
+    "jwks"
+  ],
+  "license": "MIT",
+  "author": "Amir Aghajani",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js",
+      "require": "./dist/server.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=17.0.0",
+    "react-dom": ">=17.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react-dom": { "optional": true }
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "rimraf": "^5.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

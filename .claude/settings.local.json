@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:core.telegram.org)",
+      "Bash(npm run *)"
+    ]
+  }
+}
