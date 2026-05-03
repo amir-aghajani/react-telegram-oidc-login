@@ -21,9 +21,13 @@
   ],
   "license": "MIT",
   "author": "Amir Aghajani",
+  "homepage": "https://github.com/amir-aghajani/react-telegram-oidc-login#readme",
+  "bugs": {
+    "url": "https://github.com/amir-aghajani/react-telegram-oidc-login/issues"
+  },
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "git+https://github.com/amir-aghajani/react-telegram-oidc-login.git"
   },
   "type": "module",
   "main": "./dist/index.cjs",
